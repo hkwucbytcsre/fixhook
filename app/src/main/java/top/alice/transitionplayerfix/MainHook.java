@@ -3,8 +3,9 @@ package top.alice.transitionplayerfix;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
-import top.alice.transitionplayerfix.hook.WindowOrganizerHook;
+import top.alice.transitionplayerfix.hook.ActivityManagerHook;
 import top.alice.transitionplayerfix.hook.WindowManagerHook;
+import top.alice.transitionplayerfix.hook.WindowOrganizerHook;
 
 /**
  * libxposed API 102 模块入口。
@@ -18,7 +19,7 @@ import top.alice.transitionplayerfix.hook.WindowManagerHook;
  * 安装顺序：
  *   1. 先调用 WindowOrganizerHook.initContext() 提前缓存系统 Context，
  *      避免在 Hooker 内部进行脆弱的反射。
- *   2. 再安装两个 Hook。
+ *   2. 再安装三个 Hook：入口拦截、参数校验、AMS 监控。
  */
 public class MainHook extends XposedModule {
 
@@ -63,6 +64,14 @@ public class MainHook extends XposedModule {
         } catch (Throwable t) {
             log(android.util.Log.ERROR, TAG,
                     "安装 WindowManagerHook 失败", t);
+        }
+
+        // 第四步：安装修复点三 —— 监控 AMS 中的 IApplicationThread 调用路径
+        try {
+            ActivityManagerHook.install(this, classLoader);
+        } catch (Throwable t) {
+            log(android.util.Log.ERROR, TAG,
+                    "安装 ActivityManagerHook 失败", t);
         }
     }
 }

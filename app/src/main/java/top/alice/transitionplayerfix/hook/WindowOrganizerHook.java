@@ -271,17 +271,16 @@ public class WindowOrganizerHook {
 
     /**
      * 获取当前进程名。
+     *
+     * 注意：ActivityThread.currentProcessName() 是静态方法，
+     * 应使用 invoke(null) 调用，而非传入 activityThread 实例。
+     * 若误传实例，会抛出 IllegalArgumentException，导致进程名检查失效。
      */
     private static String getCurrentProcessName(ClassLoader classLoader) {
         try {
             Class<?> atClass = Class.forName(CLS_ACTIVITY_THREAD, false, classLoader);
-            Object activityThread = atClass.getMethod("currentActivityThread")
-                    .invoke(null);
-            if (activityThread != null) {
-                return (String) activityThread.getClass()
-                        .getMethod("currentProcessName")
-                        .invoke(activityThread);
-            }
+            // currentProcessName() 是静态方法，传入 null 作为实例参数
+            return (String) atClass.getMethod("currentProcessName").invoke(null);
         } catch (Throwable ignored) {}
         return null;
     }

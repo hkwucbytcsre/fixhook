@@ -1,6 +1,7 @@
 package top.alice.transitionplayerfix.hook;
 
 import android.os.Binder;
+import android.os.Process;
 
 import java.lang.reflect.Method;
 
@@ -12,10 +13,10 @@ import io.github.libxposed.api.XposedModule;
  * setRunningRemoteTransitionDelegate 的参数类型从 IBinder 收紧为 IApplicationThread，
  * 拒绝任意 IBinder 作为过渡委托。
  *
- * 异常模式说明：
- *   本 Hook 会主动抛出 SecurityException 阻止未授权调用，
- *   因此必须使用 PASSTHROUGH 模式（或默认模式），
- *   绝不能使用 PROTECTIVE 模式，否则异常会被框架吞掉，防护失效。
+ * 加固点：
+ * 1. 参数类型校验：只接受 IApplicationThread 实例。
+ * 2. 调用者身份校验：只有 SYSTEM_UID 才能调用此方法，
+ *    防止非系统进程通过伪造 BinderProxy 绕过类型检查。
  */
 public class WindowManagerHook {
 
@@ -54,8 +55,7 @@ public class WindowManagerHook {
                 return;
             }
 
-            module.log(android.util.Log.INFO, TAG,
-                    "找到方法: " + method);
+            module.log(android.util.Log.INFO, TAG, "找到方法: " + method);
 
             // 关键：使用 PASSTHROUGH 模式，确保主动抛出的 SecurityException 能传播
             module.hook(method)
@@ -82,13 +82,24 @@ public class WindowManagerHook {
 
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            final int callingUid = Binder.getCallingUid();
+
+            // 加固点：只有系统进程才能设置过渡委托
+            if (callingUid != Process.SYSTEM_UID) {
+                module.log(android.util.Log.WARN, TAG,
+                        "拒绝非系统进程调用 setRunningRemoteTransitionDelegate: uid="
+                                + callingUid);
+                throw new SecurityException(
+                        "setRunningRemoteTransitionDelegate requires SYSTEM_UID "
+                                + "(uid=" + callingUid + ")");
+            }
+
             Object arg = chain.getArgs().get(0);
             if (arg == null) {
                 return chain.proceed();
             }
 
             if (!isIApplicationThread(arg, classLoader)) {
-                int callingUid = Binder.getCallingUid();
                 module.log(android.util.Log.WARN, TAG,
                         "拒绝非 IApplicationThread 的过渡委托参数: "
                                 + arg.getClass().getName()
