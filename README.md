@@ -1,0 +1,1 @@
+This issue has been fixed for Android 14+ in [June 2026 Android Security Bulletin](https://source.android.com/docs/security/bulletin/2026/2026-06-01). [Click here to see the patch](https://android.googlesource.com/platform/frameworks/base/+/40c30bb5613ee94403723b37d0d6c58197d3d1b4)
