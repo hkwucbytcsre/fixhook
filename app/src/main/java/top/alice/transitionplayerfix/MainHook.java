@@ -1,7 +1,5 @@
 package top.alice.transitionplayerfix;
 
-import androidx.annotation.NonNull;
-
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
@@ -26,15 +24,16 @@ public class MainHook extends XposedModule {
 
     private static final String TAG = "TransitionPlayerFix";
 
-    private static final String SYSTEM_SERVER_PROCESS = "system_server";
+    /** system_server 进程对应的包名 */
+    private static final String SYSTEM_SERVER_PACKAGE = "android";
 
     @Override
     public void onPackageReady(
-            @NonNull XposedModuleInterface.PackageReadyParam param) {
+            XposedModuleInterface.PackageReadyParam param) {
 
-        // 仅处理 system_server 进程
-        String processName = param.getProcessName();
-        if (!SYSTEM_SERVER_PROCESS.equals(processName)) {
+        // system_server 的包名是 "android"
+        String packageName = param.getPackageName();
+        if (!SYSTEM_SERVER_PACKAGE.equals(packageName)) {
             return;
         }
 

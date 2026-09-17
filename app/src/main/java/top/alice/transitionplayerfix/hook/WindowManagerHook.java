@@ -2,8 +2,6 @@ package top.alice.transitionplayerfix.hook;
 
 import android.os.Binder;
 
-import androidx.annotation.NonNull;
-
 import java.lang.reflect.Method;
 
 import io.github.libxposed.api.XposedInterface;
@@ -83,7 +81,7 @@ public class WindowManagerHook {
         }
 
         @Override
-        public Object intercept(@NonNull XposedInterface.Chain chain) throws Throwable {
+        public Object intercept(XposedInterface.Chain chain) throws Throwable {
             Object arg = chain.getArgs().get(0);
             if (arg == null) {
                 return chain.proceed();

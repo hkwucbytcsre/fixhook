@@ -3,8 +3,6 @@ package top.alice.transitionplayerfix.hook;
 import android.os.Binder;
 import android.os.Process;
 
-import androidx.annotation.NonNull;
-
 import java.lang.reflect.Method;
 
 import io.github.libxposed.api.XposedInterface;
@@ -123,7 +121,7 @@ public class WindowOrganizerHook {
         }
 
         @Override
-        public Object intercept(@NonNull XposedInterface.Chain chain) throws Throwable {
+        public Object intercept(XposedInterface.Chain chain) throws Throwable {
             final int callingUid = Binder.getCallingUid();
             final int callingPid = Binder.getCallingPid();
 
@@ -157,15 +155,11 @@ public class WindowOrganizerHook {
 
             // 策略三：Context 获取失败时的精细化降级策略
             // 此时无法执行官方补丁的权限校验，出于安全考虑，默认拒绝。
-            // 但为了兼容性，允许 system_server 自身（UID 1000）和 SystemUI（其 UID 需动态获取，
-            // 但出于简化，这里假设其可能在特定 UID 范围内，实际生产中应通过 PackageManager 查询）通过。
-            // 注意：绝对不要硬编码 UID，这里仅为示例逻辑。更安全的做法是直接拒绝所有非系统调用。
             module.log(android.util.Log.ERROR, TAG,
                     "无法获取 Context，执行降级策略。调用者: uid=" + callingUid
                             + " pid=" + callingPid);
 
-            // 安全优先：如果无法校验，则拒绝。这比放行更安全，但可能误伤。
-            // 如果你确认 SystemUI 的 UID 在特定范围内，可在此处添加白名单，但极不推荐。
+            // 安全优先：如果无法校验，则拒绝。
             throw new SecurityException(
                     "registerTransitionPlayer: cannot verify permission "
                             + "for uid=" + callingUid);
