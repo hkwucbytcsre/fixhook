@@ -35,6 +35,6 @@ android {
 }
 
 dependencies {
-    // libxposed API 102 —— 现代 Xposed API
     compileOnly 'io.github.libxposed:api:102.0.0'
+    compileOnly 'androidx.annotation:annotation:1.9.1'  // 新增
 }
