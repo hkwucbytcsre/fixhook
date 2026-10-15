@@ -3,7 +3,6 @@ package top.alice.transitionplayerfix.hook;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Process;
-import android.os.UserHandle;
 
 import java.lang.reflect.Method;
 
@@ -131,7 +130,7 @@ public class LauncherProcessHook {
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
             try {
                 final int callingUid = Binder.getCallingUid();
-                final int callingAppId = UserHandle.getAppId(callingUid);
+                final int callingAppId = callingUid % 100000;
 
                 // 白名单：SYSTEM_UID (1000) 和 ROOT_UID (0)
                 // 使用 getAppId 转换以兼容多用户场景
