@@ -1,5 +1,7 @@
 package top.alice.transitionplayerfix.hook;
 
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Process;
@@ -16,13 +18,12 @@ import io.github.libxposed.api.XposedModule;
  *
  * 漏洞利用链的第一步是攻击者从 adb shell（uid=2000）调用此方法，
  * 注册一个恶意的 ITransitionPlayer。虽然 shell 持有
- * MANAGE_ACTIVITY_TASKS 权限，但合法的调用者只应是 system_server。
+ * MANAGE_ACTIVITY_TASKS 权限，但合法的调用者只应是 SystemUI/WMShell。
  *
- * 因此本 Hook 使用 UID 硬校验：只放行 SYSTEM_UID (1000)，
- * 其他所有 UID（包括 shell 2000）一律拒绝。
- *
- * 注：不再依赖 enforceCallingPermission，因为 shell 持有该权限，
- *     权限校验对 shell 无效。
+ * UID 策略：
+ *   - SystemUI 的 sharedUserId 是 "android.uid.systemui"，并非 SYSTEM_UID (1000)。
+ *   - 在 install 阶段通过 PackageManager 动态获取其真实 UID 并缓存。
+ *   - 只放行 SYSTEM_UID 和 SystemUI 的真实 UID，其他 UID 一律拒绝。
  */
 public class WindowOrganizerHook {
 
@@ -35,6 +36,11 @@ public class WindowOrganizerHook {
     private static final String TYPE_I_TRANSITION_PLAYER =
             "android.window.ITransitionPlayer";
 
+    private static final String PKG_SYSTEMUI = "com.android.systemui";
+
+    /** 缓存的 SystemUI 真实 UID，-1 表示尚未解析 */
+    private static volatile int sSystemUiUid = -1;
+
     public static void install(XposedModule module, ClassLoader classLoader) {
         // Android 17+ 已原生加固，跳过
         if (Build.VERSION.SDK_INT >= 37) {
@@ -42,6 +48,9 @@ public class WindowOrganizerHook {
                     "Android 17+ 已原生加固，跳过 WindowOrganizerHook");
             return;
         }
+
+        // 解析 SystemUI 的真实 UID
+        resolveSystemUiUid(module);
 
         try {
             Class<?> clazz = classLoader.loadClass(CLS_WINDOW_ORGANIZER_CONTROLLER);
@@ -71,10 +80,87 @@ public class WindowOrganizerHook {
                     .intercept(new UidCheckHooker(module));
 
             module.log(android.util.Log.INFO, TAG,
-                    "已 Hook registerTransitionPlayer（UID 硬校验）");
+                    "已 Hook registerTransitionPlayer（UID 白名单: SYSTEM_UID + SystemUI）");
+
         } catch (Throwable t) {
             module.log(android.util.Log.ERROR, TAG,
                     "Hook registerTransitionPlayer 失败", t);
+        }
+    }
+
+    /**
+     * 通过 PackageManager 获取 SystemUI 的真实 UID。
+     *
+     * 使用模块自身的 Context 获取 PackageManager。如果 API 102 中
+     * getModuleContext() 不可用，回退到反射调用 ActivityThread
+     * 获取系统 Context。
+     */
+    private static void resolveSystemUiUid(XposedModule module) {
+        try {
+            // 首选：模块自身的 Context
+            android.content.Context ctx = null;
+            try {
+                Method getCtx = module.getClass()
+                        .getMethod("getModuleContext");
+                ctx = (android.content.Context) getCtx.invoke(module);
+            } catch (Throwable ignored) {
+                // API 102 可能已移除 getModuleContext，走回退路径
+            }
+
+            if (ctx == null) {
+                module.log(android.util.Log.WARN, TAG,
+                        "无法获取模块 Context，尝试回退路径");
+                resolveSystemUiUidByReflection(module);
+                return;
+            }
+
+            PackageManager pm = ctx.getPackageManager();
+            ApplicationInfo ai = pm.getApplicationInfo(PKG_SYSTEMUI, 0);
+            sSystemUiUid = ai.uid;
+
+            module.log(android.util.Log.INFO, TAG,
+                    "SystemUI UID = " + sSystemUiUid
+                            + " (appId=" + UserHandle.getAppId(sSystemUiUid) + ")");
+
+        } catch (Throwable t) {
+            module.log(android.util.Log.WARN, TAG,
+                    "获取 SystemUI UID 失败，回退到 SYSTEM_UID", t);
+            sSystemUiUid = Process.SYSTEM_UID;
+        }
+    }
+
+    /**
+     * 回退路径：通过 ActivityThread.currentActivityThread() 获取系统 Context。
+     */
+    private static void resolveSystemUiUidByReflection(XposedModule module) {
+        try {
+            Class<?> atClass = Class.forName("android.app.ActivityThread");
+            Object activityThread = atClass
+                    .getMethod("currentActivityThread").invoke(null);
+            if (activityThread == null) {
+                sSystemUiUid = Process.SYSTEM_UID;
+                return;
+            }
+
+            Object systemCtx = activityThread.getClass()
+                    .getMethod("getSystemContext").invoke(activityThread);
+            if (systemCtx == null) {
+                sSystemUiUid = Process.SYSTEM_UID;
+                return;
+            }
+
+            PackageManager pm = (PackageManager) systemCtx.getClass()
+                    .getMethod("getPackageManager").invoke(systemCtx);
+            ApplicationInfo ai = pm.getApplicationInfo(PKG_SYSTEMUI, 0);
+            sSystemUiUid = ai.uid;
+
+            module.log(android.util.Log.INFO, TAG,
+                    "SystemUI UID = " + sSystemUiUid + " (回退路径)");
+
+        } catch (Throwable t) {
+            module.log(android.util.Log.WARN, TAG,
+                    "回退路径也失败，回退到 SYSTEM_UID", t);
+            sSystemUiUid = Process.SYSTEM_UID;
         }
     }
 
@@ -92,18 +178,20 @@ public class WindowOrganizerHook {
                 final int callingUid = Binder.getCallingUid();
                 final int callingAppId = UserHandle.getAppId(callingUid);
 
-                // 只允许 system_server (1000) 调用
-                // shell (2000) 即使持有 MANAGE_ACTIVITY_TASKS 也被拒绝
-                if (callingAppId != Process.SYSTEM_UID) {
-                    module.log(android.util.Log.WARN, TAG,
-                            "拒绝非系统进程注册 TransitionPlayer: uid="
-                                    + callingUid + " appId=" + callingAppId);
-                    throw new SecurityException(
-                            "registerTransitionPlayer requires SYSTEM_UID, "
-                                    + "got uid=" + callingUid);
+                // 白名单：SYSTEM_UID (1000) + SystemUI 真实 UID
+                if (callingAppId == Process.SYSTEM_UID
+                        || callingAppId == sSystemUiUid) {
+                    return chain.proceed();
                 }
 
-                return chain.proceed();
+                // 非白名单调用者：拒绝
+                module.log(android.util.Log.WARN, TAG,
+                        "拒绝未授权注册 TransitionPlayer: uid="
+                                + callingUid + " appId=" + callingAppId
+                                + " (白名单: 1000, " + sSystemUiUid + ")");
+                throw new SecurityException(
+                        "registerTransitionPlayer requires SYSTEM_UID or "
+                                + "SystemUI UID, got uid=" + callingUid);
 
             } catch (SecurityException se) {
                 throw se;
