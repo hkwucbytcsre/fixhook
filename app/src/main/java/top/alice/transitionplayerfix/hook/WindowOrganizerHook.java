@@ -5,7 +5,6 @@ import android.content.pm.PackageManager;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Process;
-import android.os.UserHandle;
 
 import java.lang.reflect.Method;
 
@@ -120,7 +119,7 @@ public class WindowOrganizerHook {
 
             module.log(android.util.Log.INFO, TAG,
                     "SystemUI UID = " + sSystemUiUid
-                            + " (appId=" + UserHandle.getAppId(sSystemUiUid) + ")");
+                            + " (appId=" + (sSystemUiUid % 100000) + ")");
 
         } catch (Throwable t) {
             module.log(android.util.Log.WARN, TAG,
@@ -176,7 +175,7 @@ public class WindowOrganizerHook {
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
             try {
                 final int callingUid = Binder.getCallingUid();
-                final int callingAppId = UserHandle.getAppId(callingUid);
+                final int callingAppId = callingUid % 100000;
 
                 // 白名单：SYSTEM_UID (1000) + SystemUI 真实 UID
                 if (callingAppId == Process.SYSTEM_UID
