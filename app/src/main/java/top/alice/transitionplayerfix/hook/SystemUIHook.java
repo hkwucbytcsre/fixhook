@@ -7,9 +7,22 @@ import java.lang.reflect.Method;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
+/**
+ * SystemUI (WMShell) 侧 Hook。
+ *
+ * 只保留一个修复点：
+ *   Transitions.setRunningRemoteTransitionDelegate
+ *   官方补丁将参数类型从 IBinder 收紧为 IApplicationThread。
+ *   本 Hook 在运行时模拟这一收紧效果。
+ *
+ * 已移除：
+ *   - OneShotRemoteHandler（会误伤 IBinder token，导致所有过渡动画失败）
+ *   - RecentsTransitionHandler（会误伤 listener，导致最近任务过渡失败）
+ */
 public class SystemUIHook {
 
     private static final String TAG = "TransitionPlayerFix";
+
     private static final String CLS_TRANSITIONS =
             "com.android.wm.shell.transition.Transitions";
     private static final String METHOD_SET_DELEGATE =
@@ -34,7 +47,18 @@ public class SystemUIHook {
                     classLoader.loadClass(TYPE_I_APPLICATION_THREAD);
             module.log(android.util.Log.INFO, TAG,
                     "已缓存 IApplicationThread Class");
+        } catch (Throwable t) {
+            module.log(android.util.Log.ERROR, TAG,
+                    "缓存 IApplicationThread Class 失败", t);
+        }
 
+        // 只安装 setRunningRemoteTransitionDelegate 的 Hook
+        installDelegateHook(module, classLoader);
+    }
+
+    private static void installDelegateHook(XposedModule module,
+                                             ClassLoader classLoader) {
+        try {
             Class<?> clazz = classLoader.loadClass(CLS_TRANSITIONS);
 
             Method target = null;
@@ -64,7 +88,8 @@ public class SystemUIHook {
                     "已 Hook setRunningRemoteTransitionDelegate");
 
         } catch (Throwable t) {
-            module.log(android.util.Log.ERROR, TAG, "SystemUIHook 失败", t);
+            module.log(android.util.Log.ERROR, TAG,
+                    "Hook setRunningRemoteTransitionDelegate 失败", t);
         }
     }
 

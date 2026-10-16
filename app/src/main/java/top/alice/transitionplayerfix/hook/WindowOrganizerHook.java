@@ -22,7 +22,11 @@ import io.github.libxposed.api.XposedModule;
  * UID 策略：
  *   - SystemUI 的 sharedUserId 是 "android.uid.systemui"，并非 SYSTEM_UID (1000)。
  *   - 在 install 阶段通过 PackageManager 动态获取其真实 UID 并缓存。
- *   - 只放行 SYSTEM_UID 和 SystemUI 的真实 UID，其他 UID 一律拒绝。
+ *   - 只放行 SYSTEM_UID 和 SystemUI 的真实 UID。
+ *   - 若解析失败，sSystemUiUid = -1，此时放行所有调用，避免误伤。
+ *
+ * 额外修复点：canDropDuringDisplayChange
+ *   官方补丁直接移除了该方法。本 Hook 始终返回 false 模拟删除。
  */
 public class WindowOrganizerHook {
 
@@ -37,7 +41,10 @@ public class WindowOrganizerHook {
 
     private static final String PKG_SYSTEMUI = "com.android.systemui";
 
-    /** 缓存的 SystemUI 真实 UID，-1 表示尚未解析 */
+    /** PER_USER_RANGE，与 UserHandle.PER_USER_RANGE 一致 */
+    private static final int PER_USER_RANGE = 100000;
+
+    /** 缓存的 SystemUI 真实 UID，-1 表示尚未解析或解析失败 */
     private static volatile int sSystemUiUid = -1;
 
     public static void install(XposedModule module, ClassLoader classLoader) {
@@ -51,6 +58,14 @@ public class WindowOrganizerHook {
         // 解析 SystemUI 的真实 UID
         resolveSystemUiUid(module);
 
+        installRegisterHook(module, classLoader);
+        installCanDropHook(module, classLoader);
+    }
+
+    // ==================== 修复点 1 ====================
+
+    private static void installRegisterHook(XposedModule module,
+                                             ClassLoader classLoader) {
         try {
             Class<?> clazz = classLoader.loadClass(CLS_WINDOW_ORGANIZER_CONTROLLER);
 
@@ -79,21 +94,50 @@ public class WindowOrganizerHook {
                     .intercept(new UidCheckHooker(module));
 
             module.log(android.util.Log.INFO, TAG,
-                    "已 Hook registerTransitionPlayer（UID 白名单: SYSTEM_UID + SystemUI）");
-
+                    "已 Hook registerTransitionPlayer（UID 白名单）");
         } catch (Throwable t) {
             module.log(android.util.Log.ERROR, TAG,
                     "Hook registerTransitionPlayer 失败", t);
         }
     }
 
-    /**
-     * 通过 PackageManager 获取 SystemUI 的真实 UID。
-     *
-     * 使用模块自身的 Context 获取 PackageManager。如果 API 102 中
-     * getModuleContext() 不可用，回退到反射调用 ActivityThread
-     * 获取系统 Context。
-     */
+    // ==================== 修复点 2 ====================
+
+    private static void installCanDropHook(XposedModule module,
+                                            ClassLoader classLoader) {
+        try {
+            Class<?> clazz = classLoader.loadClass(
+                    CLS_WINDOW_ORGANIZER_CONTROLLER);
+
+            Method target = null;
+            for (Method m : clazz.getDeclaredMethods()) {
+                if ("canDropDuringDisplayChange".equals(m.getName())) {
+                    target = m;
+                    break;
+                }
+            }
+
+            if (target == null) {
+                module.log(android.util.Log.INFO, TAG,
+                        "canDropDuringDisplayChange 不存在（可能已打补丁），跳过");
+                return;
+            }
+
+            module.hook(target)
+                    .setExceptionMode(XposedInterface.ExceptionMode.DEFAULT)
+                    .intercept(new CanDropHooker(module));
+
+            module.log(android.util.Log.INFO, TAG,
+                    "已 Hook canDropDuringDisplayChange（始终返回 false）");
+
+        } catch (Throwable t) {
+            module.log(android.util.Log.ERROR, TAG,
+                    "Hook canDropDuringDisplayChange 失败", t);
+        }
+    }
+
+    // ==================== SystemUI UID 解析 ====================
+
     private static void resolveSystemUiUid(XposedModule module) {
         try {
             // 首选：模块自身的 Context
@@ -103,28 +147,23 @@ public class WindowOrganizerHook {
                         .getMethod("getModuleContext");
                 ctx = (android.content.Context) getCtx.invoke(module);
             } catch (Throwable ignored) {
-                // API 102 可能已移除 getModuleContext，走回退路径
             }
 
-            if (ctx == null) {
-                module.log(android.util.Log.WARN, TAG,
-                        "无法获取模块 Context，尝试回退路径");
-                resolveSystemUiUidByReflection(module);
+            if (ctx != null) {
+                PackageManager pm = ctx.getPackageManager();
+                ApplicationInfo ai = pm.getApplicationInfo(PKG_SYSTEMUI, 0);
+                sSystemUiUid = ai.uid;
+                module.log(android.util.Log.INFO, TAG,
+                        "SystemUI UID = " + sSystemUiUid);
                 return;
             }
 
-            PackageManager pm = ctx.getPackageManager();
-            ApplicationInfo ai = pm.getApplicationInfo(PKG_SYSTEMUI, 0);
-            sSystemUiUid = ai.uid;
-
-            module.log(android.util.Log.INFO, TAG,
-                    "SystemUI UID = " + sSystemUiUid
-                            + " (appId=" + (sSystemUiUid % 100000) + ")");
+            resolveSystemUiUidByReflection(module);
 
         } catch (Throwable t) {
             module.log(android.util.Log.WARN, TAG,
-                    "获取 SystemUI UID 失败，回退到 SYSTEM_UID", t);
-            sSystemUiUid = Process.SYSTEM_UID;
+                    "获取 SystemUI UID 失败，设置为 -1（放行模式）", t);
+            sSystemUiUid = -1;
         }
     }
 
@@ -137,14 +176,18 @@ public class WindowOrganizerHook {
             Object activityThread = atClass
                     .getMethod("currentActivityThread").invoke(null);
             if (activityThread == null) {
-                sSystemUiUid = Process.SYSTEM_UID;
+                sSystemUiUid = -1;
+                module.log(android.util.Log.WARN, TAG,
+                        "ActivityThread 为空，SystemUI UID 设为 -1");
                 return;
             }
 
             Object systemCtx = activityThread.getClass()
                     .getMethod("getSystemContext").invoke(activityThread);
             if (systemCtx == null) {
-                sSystemUiUid = Process.SYSTEM_UID;
+                sSystemUiUid = -1;
+                module.log(android.util.Log.WARN, TAG,
+                        "系统 Context 为空，SystemUI UID 设为 -1");
                 return;
             }
 
@@ -158,10 +201,12 @@ public class WindowOrganizerHook {
 
         } catch (Throwable t) {
             module.log(android.util.Log.WARN, TAG,
-                    "回退路径也失败，回退到 SYSTEM_UID", t);
-            sSystemUiUid = Process.SYSTEM_UID;
+                    "回退路径失败，SystemUI UID 设为 -1", t);
+            sSystemUiUid = -1;
         }
     }
+
+    // ==================== Hooker 实现 ====================
 
     private static class UidCheckHooker implements XposedInterface.Hooker {
 
@@ -174,8 +219,15 @@ public class WindowOrganizerHook {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
             try {
+                // 若 SystemUI UID 解析失败（-1），放行所有调用，避免误伤
+                if (sSystemUiUid == -1) {
+                    module.log(android.util.Log.WARN, TAG,
+                            "SystemUI UID 未解析，放行所有调用");
+                    return chain.proceed();
+                }
+
                 final int callingUid = Binder.getCallingUid();
-                final int callingAppId = callingUid % 100000;
+                final int callingAppId = callingUid % PER_USER_RANGE;
 
                 // 白名单：SYSTEM_UID (1000) + SystemUI 真实 UID
                 if (callingAppId == Process.SYSTEM_UID
@@ -199,6 +251,20 @@ public class WindowOrganizerHook {
                         "Hook 内部错误，放行避免崩溃", t);
             }
             return chain.proceed();
+        }
+    }
+
+    private static class CanDropHooker implements XposedInterface.Hooker {
+
+        private final XposedModule module;
+
+        CanDropHooker(XposedModule module) {
+            this.module = module;
+        }
+
+        @Override
+        public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            return false;
         }
     }
 }
