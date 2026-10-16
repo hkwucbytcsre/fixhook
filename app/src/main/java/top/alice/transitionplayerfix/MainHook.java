@@ -23,6 +23,30 @@ public class MainHook extends XposedModule {
 
     private static final String TAG = "TransitionPlayerFix";
 
+    /**
+     * system_server 专用回调。
+     * 只在这里安装 WindowOrganizerHook。
+     */
+    @Override
+    public void onSystemServerStarting(
+            XposedModuleInterface.SystemServerStartingParam param) {
+
+        ClassLoader classLoader = param.getClassLoader();
+
+        log(android.util.Log.INFO, TAG, "system_server 启动，安装入口拦截");
+
+        try {
+            WindowOrganizerHook.install(this, classLoader);
+        } catch (Throwable t) {
+            log(android.util.Log.ERROR, TAG,
+                    "安装 WindowOrganizerHook 失败", t);
+        }
+    }
+
+    /**
+     * 普通应用进程回调。
+     * 处理 SystemUI 和 Launcher。
+     */
     @Override
     public void onPackageReady(
             XposedModuleInterface.PackageReadyParam param) {
@@ -30,25 +54,9 @@ public class MainHook extends XposedModule {
         String packageName = param.getPackageName();
         ClassLoader classLoader = param.getClassLoader();
 
-        // ===== system_server =====
-        // LSPosed 中 system_server 的包名可能是 "android" 或 "system"
-        if (isSystemServer(packageName)) {
-            log(android.util.Log.INFO, TAG,
-                    "已加载到 system_server (" + packageName + ")");
-
-            try {
-                WindowOrganizerHook.install(this, classLoader);
-            } catch (Throwable t) {
-                log(android.util.Log.ERROR, TAG,
-                        "安装 WindowOrganizerHook 失败", t);
-            }
-            return;
-        }
-
         // ===== SystemUI (WMShell) =====
         if ("com.android.systemui".equals(packageName)) {
-            log(android.util.Log.INFO, TAG,
-                    "已加载到 SystemUI (WMShell)");
+            log(android.util.Log.INFO, TAG, "已加载到 SystemUI (WMShell)");
             try {
                 SystemUIHook.install(this, classLoader);
             } catch (Throwable t) {
@@ -59,20 +67,11 @@ public class MainHook extends XposedModule {
         }
 
         // ===== Launcher =====
-        // LauncherProcessHook 内部会判断包名是否为 Launcher，
-        // 不是则直接返回
         try {
             LauncherProcessHook.install(this, classLoader, packageName);
         } catch (Throwable t) {
             log(android.util.Log.ERROR, TAG,
                     "安装 LauncherProcessHook 失败", t);
         }
-    }
-
-    /**
-     * system_server 在不同 LSPosed 版本中包名可能是 "android" 或 "system"。
-     */
-    private static boolean isSystemServer(String packageName) {
-        return "android".equals(packageName) || "system".equals(packageName);
     }
 }
