@@ -27,6 +27,10 @@ import io.github.libxposed.api.XposedModule;
  *
  * 额外修复点：canDropDuringDisplayChange
  *   官方补丁直接移除了该方法。本 Hook 始终返回 false 模拟删除。
+ *
+ * API 102 适配：
+ *   - getModuleContext() 在 API 101 中已被移除，改用 getModuleApplicationInfo()。
+ *   - 通过 ActivityThread.getSystemContext() 获取系统 PackageManager。
  */
 public class WindowOrganizerHook {
 
@@ -138,27 +142,23 @@ public class WindowOrganizerHook {
 
     // ==================== SystemUI UID 解析 ====================
 
+    /**
+     * API 102 标准写法：使用 getModuleApplicationInfo() 获取模块自身信息，
+     * 通过 ActivityThread.getSystemContext() 获取系统 PackageManager。
+     *
+     * 注意：getModuleContext() 在 API 101 中已被移除，不再使用反射调用。
+     */
     private static void resolveSystemUiUid(XposedModule module) {
         try {
-            // 首选：模块自身的 Context
-            android.content.Context ctx = null;
-            try {
-                Method getCtx = module.getClass()
-                        .getMethod("getModuleContext");
-                ctx = (android.content.Context) getCtx.invoke(module);
-            } catch (Throwable ignored) {
-            }
-
-            if (ctx != null) {
-                PackageManager pm = ctx.getPackageManager();
-                ApplicationInfo ai = pm.getApplicationInfo(PKG_SYSTEMUI, 0);
-                sSystemUiUid = ai.uid;
+            // 获取模块自身的 ApplicationInfo（API 102 标准）
+            ApplicationInfo moduleInfo = module.getModuleApplicationInfo();
+            if (moduleInfo != null) {
                 module.log(android.util.Log.INFO, TAG,
-                        "SystemUI UID = " + sSystemUiUid);
-                return;
+                        "模块 APK 路径: " + moduleInfo.sourceDir);
             }
 
-            resolveSystemUiUidByReflection(module);
+            // 通过系统 Context 获取 SystemUI 的 UID
+            resolveSystemUiUidBySystemContext(module);
 
         } catch (Throwable t) {
             module.log(android.util.Log.WARN, TAG,
@@ -167,10 +167,7 @@ public class WindowOrganizerHook {
         }
     }
 
-    /**
-     * 回退路径：通过 ActivityThread.currentActivityThread() 获取系统 Context。
-     */
-    private static void resolveSystemUiUidByReflection(XposedModule module) {
+    private static void resolveSystemUiUidBySystemContext(XposedModule module) {
         try {
             Class<?> atClass = Class.forName("android.app.ActivityThread");
             Object activityThread = atClass
@@ -197,11 +194,11 @@ public class WindowOrganizerHook {
             sSystemUiUid = ai.uid;
 
             module.log(android.util.Log.INFO, TAG,
-                    "SystemUI UID = " + sSystemUiUid + " (回退路径)");
+                    "SystemUI UID = " + sSystemUiUid);
 
         } catch (Throwable t) {
             module.log(android.util.Log.WARN, TAG,
-                    "回退路径失败，SystemUI UID 设为 -1", t);
+                    "系统 Context 路径失败，SystemUI UID 设为 -1", t);
             sSystemUiUid = -1;
         }
     }

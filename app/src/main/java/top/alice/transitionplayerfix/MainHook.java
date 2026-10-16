@@ -10,14 +10,10 @@ import top.alice.transitionplayerfix.hook.WindowOrganizerHook;
 /**
  * libxposed API 102 模块入口。
  *
- * 精简后的 Hook 分布（三层防御）：
+ * Hook 分布（三层防御）：
  *   1. system_server → WindowOrganizerHook    入口拦截
- *   2. SystemUI      → SystemUIHook           参数校验（辅助）
+ *   2. SystemUI      → SystemUIHook           参数校验
  *   3. Launcher      → LauncherProcessHook    最终防线
- *
- * 已移除：
- *   - WindowManagerHook（与 SystemUIHook 功能重叠，不在攻击链上）
- *   - ActivityManagerHook（与漏洞利用链无关）
  */
 public class MainHook extends XposedModule {
 
